@@ -1,6 +1,7 @@
 {
   "name": "ng-improved-modules",
   "version": "0.1.0-snapshot",
+  "main": "./ng-improved-modules.js",
   "dependencies": {
     "angular": "1.2.16"
   },
