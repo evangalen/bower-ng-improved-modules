@@ -1,2 +1,2 @@
-bower-ng-improved-modules
-=========================
+bower-ng-module-introspector
+============================

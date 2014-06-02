@@ -1,20 +1,18 @@
-/* global angular */
 (function() {
 'use strict';
 
 angular.module('ngImprovedModules', []);
 
 }());
-;/* global angular */
-(function() {
+
+;(function() {
 'use strict';
 
 /** @const */
 var serviceRegistrationMethodNames = ['provider', 'factory', 'service', 'value', 'constant'];
 
-angular.module('ngImprovedModules').factory('moduleIntrospector', [
-    'moduleInvokeQueueItemInfoExtractor',
-    function(moduleInvokeQueueItemInfoExtractor) {
+// @ngInject
+function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
 
     /**
      * @ngdoc type
@@ -115,9 +113,9 @@ angular.module('ngImprovedModules').factory('moduleIntrospector', [
                     module, '$provide', serviceRegistrationMethodNames, serviceName);
 
             if (!result) {
-                var ngModuleInjector = angular.injector(['ng']);
+                var ngModuleInjector = /** @type {$injector} */ angular.injector(['ng']);
 
-                if (ngModuleInjector.has(serviceName)) {
+                if (hasService(ngModuleInjector, serviceName)) {
                     result = {module: angular.module('ng')};
                 }
             }
@@ -137,9 +135,9 @@ angular.module('ngImprovedModules').factory('moduleIntrospector', [
                     module, '$filterProvider', 'register', filterName);
 
             if (!result) {
-                var ngModuleInjector = angular.injector(['ng']);
+                var ngModuleInjector = /** @type {$injector} */ angular.injector(['ng']);
 
-                if (ngModuleInjector.has(filterName + 'Filter')) {
+                if (hasService(ngModuleInjector, filterName + 'Filter')) {
                     result = {module: angular.module('ng')};
                 }
             }
@@ -166,6 +164,29 @@ angular.module('ngImprovedModules').factory('moduleIntrospector', [
             return result;
         }
 
+        /**
+         * @param {$injector} injector
+         * @param {string} serviceName
+         * @returns {boolean}
+         */
+        function hasService(injector, serviceName) {
+            if (injector.has) {
+                return injector.has(serviceName);
+            } else {
+                try {
+                    injector.get(serviceName);
+
+                    return true;
+                } catch (e) {
+                    if (e instanceof Error && e.message.indexOf('Unknown provider: ') === 0) {
+                        return false;
+                    } else {
+                        throw e;
+                    }
+                }
+            }
+        }
+
     }
 
 
@@ -180,14 +201,25 @@ angular.module('ngImprovedModules').factory('moduleIntrospector', [
         return new ModuleIntrospector(module);
     };
 
-}]);
+}
+moduleIntrospectorServiceFactory.$inject = ["moduleInvokeQueueItemInfoExtractor"];
+
+
+angular.module('ngImprovedModules')
+    .factory('moduleIntrospector', moduleIntrospectorServiceFactory);
 
 }());
-;/* global angular */
-(function() {
+
+;(function() {
 'use strict';
 
-angular.module('ngImprovedModules').service('moduleInvokeQueueItemInfoExtractor', [function () {
+/**
+ * @ngdoc service
+ * @name ModuleInvokeQueueItemInfoExtractor
+ * @constructor
+ */
+// @ngInject
+function ModuleInvokeQueueItemInfoExtractor() {
 
     var that = this;
 
@@ -202,14 +234,14 @@ angular.module('ngImprovedModules').service('moduleInvokeQueueItemInfoExtractor'
         function findInvokeQueueItemInfoRecursive(currentModule, providerName, providerMethods, itemName) {
             var result = null;
 
-            for (var j = 0; j < currentModule.requires.length; j++) {
-                var requiredModule = angular.module(currentModule.requires[j]);
+            angular.forEach(currentModule.requires, function(nameOfRequiredModule) {
+                var requiredModule = angular.module(nameOfRequiredModule);
 
                 result = findInvokeQueueItemInfoRecursive(requiredModule, providerName, providerMethods, itemName);
 
                 //TODO: write logic to account for the fact that a non-constant declaration should not be allowed to
                 //  override a earlier constant declaration
-            }
+            });
 
             var providerDeclarationOnInvokeQueue =
                 that.findProviderDeclarationOnInvokeQueue(currentModule, providerName, providerMethods, itemName);
@@ -229,11 +261,9 @@ angular.module('ngImprovedModules').service('moduleInvokeQueueItemInfoExtractor'
      * @returns {?{providerMethod: string, declaration: *}}
      */
     this.findProviderDeclarationOnInvokeQueue = function (currentModule, providerName, providerMethods, itemName) {
-        var result;
+        var result = null;
 
-        for (var i = 0; i < currentModule._invokeQueue.length; i++) {
-            var item = currentModule._invokeQueue[i];
-
+        angular.forEach(currentModule._invokeQueue, function(item, index) {
             var currentProviderName = item[0];
             var currentProviderMethod = item[1];
 
@@ -257,11 +287,11 @@ angular.module('ngImprovedModules').service('moduleInvokeQueueItemInfoExtractor'
                         }
                     }
                 } else {
-                    throw 'Unexpected length of invokeQueue[' + i + '][2] (the "invokeLater" arguments): ' +
+                    throw 'Unexpected length of invokeQueue[' + index + '][2] (the "invokeLater" arguments): ' +
                         invokeLaterArgs.length;
                 }
             }
-        }
+        });
 
         return result;
     };
@@ -270,6 +300,10 @@ angular.module('ngImprovedModules').service('moduleInvokeQueueItemInfoExtractor'
     function isConstantService(providerName, providerMethod) {
         return providerName === '$provide' && providerMethod === 'constant';
     }
-}]);
+}
+
+
+angular.module('ngImprovedModules')
+    .service('moduleInvokeQueueItemInfoExtractor', ModuleInvokeQueueItemInfoExtractor);
 
 }());
