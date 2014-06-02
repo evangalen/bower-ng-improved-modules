@@ -1,7 +1,7 @@
 (function() {
 'use strict';
 
-angular.module('ngImprovedModules', []);
+angular.module('ngModuleIntrospector', []);
 
 }());
 
@@ -205,7 +205,7 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
 moduleIntrospectorServiceFactory.$inject = ["moduleInvokeQueueItemInfoExtractor"];
 
 
-angular.module('ngImprovedModules')
+angular.module('ngModuleIntrospector')
     .factory('moduleIntrospector', moduleIntrospectorServiceFactory);
 
 }());
@@ -303,7 +303,7 @@ function ModuleInvokeQueueItemInfoExtractor() {
 }
 
 
-angular.module('ngImprovedModules')
+angular.module('ngModuleIntrospector')
     .service('moduleInvokeQueueItemInfoExtractor', ModuleInvokeQueueItemInfoExtractor);
 
 }());
