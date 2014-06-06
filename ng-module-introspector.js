@@ -42,12 +42,31 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
          * @returns {Object.<{instance: *, module: angular.Module}>}
          */
         this.getServiceDependencies = function(injector, serviceName) {
-            var serviceInfo = getServiceInfo(serviceName);
-            if (!serviceInfo.declaration) {
-                throw 'Could not find declaration of service with name: ' + serviceName;
-            }
+            var serviceInfo = this.getServiceDeclaration(serviceName);
 
             return getRegisteredObjectDependencies(injector, serviceInfo);
+        };
+
+        /**
+         *
+         * @param {string} serviceName
+         * @returns {boolean}
+         */
+        this.hasValueService = function(serviceName) {
+            var serviceInfo = getServiceInfo(serviceName);
+
+            return !!(serviceInfo && serviceInfo.declaration && serviceInfo.providerMethod === 'value');
+        };
+
+        /**
+         *
+         * @param {string} serviceName
+         * @returns {boolean}
+         */
+        this.hasConstantService = function(serviceName) {
+            var serviceInfo = getServiceInfo(serviceName);
+
+            return !!(serviceInfo && serviceInfo.declaration && serviceInfo.providerMethod === 'constant');
         };
 
         /**
@@ -223,67 +242,98 @@ function ModuleInvokeQueueItemInfoExtractor() {
 
     var that = this;
 
+
     /**
+     * @param {object} module an angular module
+     * @param {string} providerName
+     * @param {Array.<string>} providerMethods
+     * @param {string} itemName
      * @returns {?{module: Object, providerMethod: string, declaration: *}}
      */
     this.findInvokeQueueItemInfo = function (module, providerName, providerMethods, itemName) {
 
         /**
+         * @param {?{module: Object, providerMethod: string, declaration: *}} previousResult
+         * @param {object} currentModule
+         * @param {{providerName: string, providerMethods: Array.<string>, itemName: string}} searchParams
          * @returns {?{module: Object, providerMethod: string, declaration: *}}
          */
-        function findInvokeQueueItemInfoRecursive(currentModule, providerName, providerMethods, itemName) {
+        function findInvokeQueueItemInfoRecursive(previousResult, currentModule, searchParams) {
+
             var result = null;
 
             angular.forEach(currentModule.requires, function(nameOfRequiredModule) {
                 var requiredModule = angular.module(nameOfRequiredModule);
 
-                result = findInvokeQueueItemInfoRecursive(requiredModule, providerName, providerMethods, itemName);
+                var resultFromRecursiveInvocation =
+                    findInvokeQueueItemInfoRecursive(previousResult, requiredModule, searchParams);
 
-                //TODO: write logic to account for the fact that a non-constant declaration should not be allowed to
-                //  override a earlier constant declaration
+                if (providerName !== '$provide' || !previousResult || !resultFromRecursiveInvocation ||
+                        previousResult.providerMethod !== 'constant' ||
+                        resultFromRecursiveInvocation.providerMethod === 'constant') {
+                    result = resultFromRecursiveInvocation;
+                }
+
+                previousResult = result;
             });
 
             var providerDeclarationOnInvokeQueue =
-                that.findProviderDeclarationOnInvokeQueue(currentModule, providerName, providerMethods, itemName);
+                that.findProviderDeclarationOnInvokeQueue(previousResult, currentModule, searchParams);
             if (providerDeclarationOnInvokeQueue) {
                 result = angular.extend(providerDeclarationOnInvokeQueue, {module: currentModule});
+
+                if (!result) {
+                    result = previousResult;
+                } else {
+                    previousResult = result;
+                }
             }
 
             return result;
         }
 
 
-        return findInvokeQueueItemInfoRecursive(module, providerName, providerMethods, itemName);
+        return findInvokeQueueItemInfoRecursive(
+                null, module, {providerName: providerName, providerMethods: providerMethods, itemName: itemName});
     };
 
 
     /**
+     * @param {?{module: Object, providerMethod: string, declaration: *}} previousResult
+     * @param {object} currentModule
+     * @param {{providerName: string, providerMethods: Array.<string>, itemName: string}} searchParams
      * @returns {?{providerMethod: string, declaration: *}}
      */
-    this.findProviderDeclarationOnInvokeQueue = function (currentModule, providerName, providerMethods, itemName) {
+    this.findProviderDeclarationOnInvokeQueue = function (previousResult, currentModule, searchParams) {
         var result = null;
 
         angular.forEach(currentModule._invokeQueue, function(item, index) {
             var currentProviderName = item[0];
             var currentProviderMethod = item[1];
 
-            if (currentProviderName === providerName && providerMethods.indexOf(currentProviderMethod) !== -1) {
+            if (currentProviderName === searchParams.providerName &&
+                    searchParams.providerMethods.indexOf(currentProviderMethod) !== -1) {
                 var invokeLaterArgs = item[2];
 
                 if (invokeLaterArgs.length === 2) {
-                    if (invokeLaterArgs[0] === itemName) {
-                        result = {providerMethod: currentProviderMethod, declaration: invokeLaterArgs[1]};
+                    if (invokeLaterArgs[0] === searchParams.itemName) {
+                        if (isNotConstantServiceOrTryingToOverrideOne(
+                                previousResult, searchParams, currentProviderMethod)) {
+                            result = {providerMethod: currentProviderMethod, declaration: invokeLaterArgs[1]};
 
-                        if (isConstantService(providerName, currentProviderMethod)) {
-                            return result;
+                            previousResult = result;
                         }
                     }
                 } else if (invokeLaterArgs.length === 1) {
-                    if (invokeLaterArgs[0].hasOwnProperty(itemName)) {
-                        result = {providerMethod: currentProviderMethod, declaration: invokeLaterArgs[0][itemName]};
+                    if (invokeLaterArgs[0].hasOwnProperty(searchParams.itemName)) {
+                        if (isNotConstantServiceOrTryingToOverrideOne(
+                                previousResult, searchParams, currentProviderMethod)) {
+                            result = {
+                                providerMethod: currentProviderMethod,
+                                declaration: invokeLaterArgs[0][searchParams.itemName]
+                            };
 
-                        if (isConstantService(providerName, currentProviderMethod)) {
-                            return result;
+                            previousResult = result;
                         }
                     }
                 } else {
@@ -297,8 +347,9 @@ function ModuleInvokeQueueItemInfoExtractor() {
     };
 
 
-    function isConstantService(providerName, providerMethod) {
-        return providerName === '$provide' && providerMethod === 'constant';
+    function isNotConstantServiceOrTryingToOverrideOne(previousResult, searchParams, currentProviderMethod) {
+        return searchParams.providerName !== '$provide' || !previousResult ||
+                previousResult.providerMethod !== 'constant' || currentProviderMethod === 'constant';
     }
 }
 
