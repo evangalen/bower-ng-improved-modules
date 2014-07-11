@@ -23,6 +23,7 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
 
         var module = angular.module(moduleName);
 
+
         /**
          * @param {string} serviceName
          * @returns {{module: Object, providerMethod: string, declaration: *}}
@@ -70,6 +71,19 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
         };
 
         /**
+         * @param {string} filterName
+         * @returns {{module: Object, providerMethod: string, declaration: *}}
+         */
+        this.getFilterDeclaration = function(filterName) {
+            var filterInfo = getFilterInfo(filterName);
+            if (!filterInfo.declaration) {
+                throw 'Could not find declaration of filter with name: ' + filterName;
+            }
+
+            return filterInfo;
+        };
+
+        /**
          * @param injector
          * @param {string} filterName
          * @returns {Object.<{instance: *, module: angular.Module}>}
@@ -81,6 +95,19 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
             }
 
             return getRegisteredObjectDependencies(injector, filterInfo);
+        };
+
+        /**
+         * @param {string} controllerName
+         * @returns {{module: Object, providerMethod: string, declaration: *}}
+         */
+        this.getControllerDeclaration = function(controllerName) {
+            var controllerInfo = getControllerInfo(controllerName);
+            if (!controllerInfo.declaration) {
+                throw 'Could not find declaration of controller with name: ' + controllerName;
+            }
+
+            return controllerInfo;
         };
 
         /**
@@ -97,7 +124,6 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
             return getRegisteredObjectDependencies($injector, controllerInfo, '$scope');
         };
 
-
         /**
          * @param injector
          * @param {{module: Object, declaration: *}} registeredObjectInfo
@@ -105,7 +131,18 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
          * @returns {Object.<{instance: *, module: angular.Module}>}
          */
         function getRegisteredObjectDependencies(injector, registeredObjectInfo, toBeIgnoredDependencyServiceNames) {
-            var dependencyServiceNames = injector.annotate(registeredObjectInfo.declaration);
+            var declaration = registeredObjectInfo.declaration;
+
+            if (registeredObjectInfo.providerMethod === 'provider') {
+                if (angular.isObject(declaration) && !angular.isArray(declaration)) {
+                    declaration = declaration.$get;
+                } else {
+                    var providerInstance = injector.instantiate(declaration);
+                    declaration = providerInstance.$get;
+                }
+            }
+
+            var dependencyServiceNames = injector.annotate(declaration);
             toBeIgnoredDependencyServiceNames = Array.prototype.slice.call(arguments, 2);
 
             var result = {};
