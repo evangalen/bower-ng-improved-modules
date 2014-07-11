@@ -26,7 +26,7 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
 
         /**
          * @param {string} serviceName
-         * @returns {{module: Object, providerMethod: string, declaration: *}}
+         * @returns {{module: Object, providerName: string, providerMethod: string, declaration: *}}
          */
         this.getServiceDeclaration = function(serviceName) {
             var serviceInfo = getServiceInfo(serviceName);
@@ -72,7 +72,7 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
 
         /**
          * @param {string} filterName
-         * @returns {{module: Object, providerMethod: string, declaration: *}}
+         * @returns {{module: Object, providerName: string, providerMethod: string, declaration: *}}
          */
         this.getFilterDeclaration = function(filterName) {
             var filterInfo = getFilterInfo(filterName);
@@ -99,7 +99,7 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
 
         /**
          * @param {string} controllerName
-         * @returns {{module: Object, providerMethod: string, declaration: *}}
+         * @returns {{module: Object, providerName: string, providerMethod: string, declaration: *}}
          */
         this.getControllerDeclaration = function(controllerName) {
             var controllerInfo = getControllerInfo(controllerName);
@@ -162,7 +162,7 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
 
 
         /**
-         * @returns {({module: Object}|{module: Object, providerMethod: string, declaration: *})}
+         * @returns {({module: Object}|{module: Object, providerName: string, providerMethod: string, declaration: *})}
          */
         function getServiceInfo(serviceName) {
             var result = moduleInvokeQueueItemInfoExtractor.findInvokeQueueItemInfo(
@@ -172,8 +172,10 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
                 var ngModuleInjector = /** @type {$injector} */ angular.injector(['ng']);
 
                 if (hasService(ngModuleInjector, serviceName)) {
-                    result = {module: angular.module('ng')};
+                   result = {module: angular.module('ng')};
                 }
+            } else {
+                result.providerName = '$provide';
             }
 
             if (!result) {
@@ -184,7 +186,7 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
         }
 
         /**
-         * @returns {({module: Object}|{module: Object, providerMethod: string, declaration: *})}
+         * @returns {({module: Object}|{module: Object, providerName: string, providerMethod: string, declaration: *})}
          */
         function getFilterInfo(filterName) {
             var result = moduleInvokeQueueItemInfoExtractor.findInvokeQueueItemInfo(
@@ -196,6 +198,8 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
                 if (hasService(ngModuleInjector, filterName + 'Filter')) {
                     result = {module: angular.module('ng')};
                 }
+            } else {
+                result.providerName = '$filterProvider';
             }
 
             if (!result) {
@@ -207,7 +211,7 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
 
         /**
          * @param {string} controllerName
-         * @returns {({module: Object}|{module: Object, providerMethod: string, declaration: *})}
+         * @returns {({module: Object}|{module: Object, providerName: string, providerMethod: string, declaration: *})}
          */
         function getControllerInfo(controllerName) {
             var result = moduleInvokeQueueItemInfoExtractor.findInvokeQueueItemInfo(
@@ -215,6 +219,8 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
 
             if (!result) {
                 throw 'Could not find controller with name: ' + controllerName;
+            } else {
+                result.providerName = '$controllerProvider';
             }
 
             return result;
