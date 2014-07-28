@@ -1,6 +1,6 @@
 {
   "name": "ng-module-introspector",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "main": "./ng-module-introspector.js",
   "authors": [
     "Emil van Galen <evangalen@gmail.com>"
