@@ -37,6 +37,11 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
          */
         this.getServiceDeclaration = function(serviceName) {
             var serviceInfo = getServiceInfo(serviceName);
+
+            if (serviceInfo.providerMethod === 'provider' && serviceInfo.declaration) {
+                serviceInfo.declaration = $getDeclaration(serviceName, serviceInfo.declaration);
+            }
+
             if (!serviceInfo.declaration) {
                 throw 'Could not find declaration of service with name: ' + serviceName;
             }
@@ -51,10 +56,6 @@ function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
          */
         this.getServiceDependencies = function(injector, serviceName) {
             var serviceInfo = this.getServiceDeclaration(serviceName);
-
-            if (serviceInfo.providerMethod === 'provider') {
-                serviceInfo.declaration = $getDeclaration(serviceName, serviceInfo.declaration);
-            }
 
             return getRegisteredObjectDependencies(injector, serviceInfo);
         };
