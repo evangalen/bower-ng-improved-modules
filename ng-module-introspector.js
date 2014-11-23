@@ -1,501 +1,336 @@
-(function() {
-'use strict';
+/**
+ * @license ngModuleIntrospector
+ * (c) 2014 Emil van Galen. https://github.com/evangalen/ng-improved-modules
+ * License: MIT
+ */
+(function() { 'use strict';
 
 angular.module('ngModuleIntrospector', []);
 
-}());
-
-;(function() {
-'use strict';
-
-/** @const */
-var serviceRegistrationMethodNames = ['provider', 'factory', 'service', 'value', 'constant'];
-
-/** @const */
-var angular1_0 = angular.version.full.indexOf('1.0.') === 0;
-
-
-var numberOfBuildProviderProbingModules = 0;
+/**
+ * @typedef {(Function|Array.<(string|Function)>)} PossiblyAnnotatedFn
+ */
+/**
+ * @typedef {({$get: Function|Array.<(string|Function)>}|Function|Array.<(string|Function)>)} RawProviderDeclaration
+ */
+/**
+ * @typedef {({$get: Function|Array.<(string|Function)>}|Function)} StrippedProviderDeclaration
+ */
 
 
-// @ngInject
-function moduleIntrospectorServiceFactory(moduleInvokeQueueItemInfoExtractor) {
+/**
+ * @ngdoc type
+ * @param {...string} moduleNames
+ * @constructor
+ */
+function ModuleIntrospector(moduleNames) {
+    moduleNames = Array.prototype.slice.call(arguments, 0);
+
 
     /**
-     * @ngdoc type
-     * @param {string} moduleName
-     * @constructor
+     * @param {object} providerInstance
+     * @param {string} methodName
+     * @param {function(string, *)} afterMethodLogic
      */
-    function ModuleIntrospector(moduleName) {
+    function afterProviderMethodExecution(providerInstance, methodName, afterMethodLogic) {
+        return afterExecution(providerInstance, methodName, supportObject(afterMethodLogic));
+    }
 
-        var module = angular.module(moduleName);
-
-
-        /**
-         * @param {string} serviceName
-         * @returns {{module: Object, providerName: string, providerMethod: string, declaration: *}}
-         */
-        this.getServiceDeclaration = function(serviceName) {
-            var serviceInfo = getServiceInfo(serviceName);
-
-            if (serviceInfo.providerMethod === 'provider' && serviceInfo.declaration) {
-                serviceInfo.declaration = $getDeclaration(serviceName, serviceInfo.declaration);
+    /**
+     * @param {function(string, *)} delegate
+     * @returns {function((object|string), *=)}
+     */
+    function supportObject(delegate) {
+        return function(key, value) {
+            if (angular.isObject(key)) {
+                angular.forEach(arguments[0], function(rawDeclaration, componentName) {
+                    delegate(componentName, rawDeclaration);
+                });
+            } else {
+                return delegate(key, value);
             }
-
-            if (!serviceInfo.declaration) {
-                throw 'Could not find declaration of service with name: ' + serviceName;
-            }
-
-            return serviceInfo;
         };
+    }
 
-        /**
-         * @param injector
-         * @param {string} serviceName
-         * @returns {Object.<{instance: *, module: angular.Module}>}
-         */
-        this.getServiceDependencies = function(injector, serviceName) {
-            var serviceInfo = this.getServiceDeclaration(serviceName);
+    /**
+     * @param {object} object
+     * @param {string} methodName
+     * @param {Function} afterMethodLogic
+     */
+    function afterExecution(object, methodName, afterMethodLogic) {
+        var originalMethod = object[methodName];
 
-            return getRegisteredObjectDependencies(injector, serviceInfo);
+        object[methodName] = function() {
+            var result = originalMethod.apply(this, arguments);
+
+            afterMethodLogic.apply(this, arguments);
+
+            return result;
         };
+    }
 
-        /**
-         *
-         * @param {string} serviceName
-         * @returns {boolean}
-         */
-        this.hasValueService = function(serviceName) {
-            var serviceInfo = getServiceInfo(serviceName);
+    /**
+     * @param {PossiblyAnnotatedFn} possiblyAnnotatedFn
+     * @returns {Function}
+     */
+    function stripAnnotations(possiblyAnnotatedFn) {
+        if (angular.isFunction(possiblyAnnotatedFn)) {
+            return possiblyAnnotatedFn;
+        } else {
+            return possiblyAnnotatedFn[possiblyAnnotatedFn.length - 1];
+        }
+    }
 
-            return !!(serviceInfo && serviceInfo.declaration && serviceInfo.providerMethod === 'value');
+    /**
+     * @param {PossiblyAnnotatedFn} possiblyAnnotatedFn
+     * @returns {string[]}
+     */
+    function determineDependencies(possiblyAnnotatedFn) {
+        return emptyInjector.annotate(possiblyAnnotatedFn);
+    }
+
+    /**
+     * @param {string} providerName
+     * @param {string} providerMethod
+     * @param {string} componentName
+     * @param {*} rawDeclaration
+     * @param {*} strippedDeclaration
+     * @param {string[]} injectedServices
+     */
+    function registerComponent(
+            providerName, providerMethod, componentName, rawDeclaration, strippedDeclaration, injectedServices) {
+        var registeredComponents = registeredComponentsPerProviderName[providerName];
+        if (!registeredComponents) {
+            registeredComponents = {};
+            registeredComponentsPerProviderName[providerName] = registeredComponents;
+        }
+
+        registeredComponents[componentName] = {
+            providerMethod: providerMethod,
+            componentName: componentName,
+            rawDeclaration: rawDeclaration,
+            strippedDeclaration: strippedDeclaration,
+            injectedServices: injectedServices
         };
+    }
 
-        /**
-         *
-         * @param {string} serviceName
-         * @returns {boolean}
-         */
-        this.hasConstantService = function(serviceName) {
-            var serviceInfo = getServiceInfo(serviceName);
+    /**
+     * @param {string} serviceName
+     * @returns {boolean}
+     */
+    function existingConstantService(serviceName) {
+        var registeredServices = registeredComponentsPerProviderName.$provide;
+        if (!registeredServices) {
+            return false;
+        }
 
-            return !!(serviceInfo && serviceInfo.declaration && serviceInfo.providerMethod === 'constant');
-        };
+        var registeredService = registeredServices[serviceName];
+        return !!registeredService && registeredService.providerMethod === 'constant';
+    }
 
-        /**
-         * @param {string} filterName
-         * @returns {{module: Object, providerName: string, providerMethod: string, declaration: *}}
-         */
-        this.getFilterDeclaration = function(filterName) {
-            var filterInfo = getFilterInfo(filterName);
-            if (!filterInfo.declaration) {
-                throw 'Could not find declaration of filter with name: ' + filterName;
-            }
-
-            return filterInfo;
-        };
-
-        /**
-         * @param injector
-         * @param {string} filterName
-         * @returns {Object.<{instance: *, module: angular.Module}>}
-         */
-        this.getFilterDependencies = function(injector, filterName) {
-            var filterInfo = getFilterInfo(filterName);
-            if (!filterInfo.declaration) {
-                throw 'Could not find declaration of filter with name: ' + filterName;
-            }
-
-            return getRegisteredObjectDependencies(injector, filterInfo);
-        };
-
-        /**
-         * @param {string} controllerName
-         * @returns {{module: Object, providerName: string, providerMethod: string, declaration: *}}
-         */
-        this.getControllerDeclaration = function(controllerName) {
-            return getControllerInfo(controllerName);
-        };
-
-        /**
-         * @param $injector
-         * @param {string} controllerName
-         * @returns {Object.<{instance: *, module: angular.Module}>}
-         */
-        this.getControllerDependencies = function($injector, controllerName) {
-            var controllerInfo = getControllerInfo(controllerName);
-
-            return getRegisteredObjectDependencies($injector, controllerInfo, '$scope');
-        };
-
-        /**
-         * @param {string} directiveName
-         * @returns {{module: Object, providerName: string, providerMethod: string, declaration: *}}
-         */
-        this.getDirectiveDeclaration = function(directiveName) {
-            return getDirectiveInfo(directiveName);
-        };
-
-        /**
-         * @param $injector
-         * @param {string} directiveName
-         * @returns {Object.<{instance: *, module: angular.Module}>}
-         */
-        this.getDirectiveDependencies = function($injector, directiveName) {
-            var directiveInfo = getDirectiveInfo(directiveName);
-
-            return getRegisteredObjectDependencies($injector, directiveInfo);
-        };
-
-        if (!angular1_0) {
-            /**
-             * @param {string} animationName
-             * @returns {{module: Object, providerName: string, providerMethod: string, declaration: *}}
-             */
-            this.getAnimationDeclaration = function (animationName) {
-                return getAnimationInfo(animationName);
+    /**
+     * @param {string} serviceProviderName
+     * @param {RawProviderDeclaration} rawDeclaration
+     * @param {StrippedProviderDeclaration} strippedDeclaration
+     * @param {string[]} injectedProviders
+     */
+    function registerServiceProviderDeclaration(
+            serviceProviderName, rawDeclaration, strippedDeclaration, injectedProviders) {
+        serviceProviderDeclarationPerProviderName[serviceProviderName] = {
+                rawDeclaration: rawDeclaration,
+                strippedDeclaration: strippedDeclaration,
+                injectedProviders: injectedProviders
             };
+    }
 
-            /**
-             * @param $injector
-             * @param {string} animationName
-             * @returns {Object.<{instance: *, module: angular.Module}>}
-             */
-            this.getAnimationDependencies = function ($injector, animationName) {
-                var animationInfo = getAnimationInfo(animationName);
+    function registerBuiltInFilters($FilterProvider) {
+        var $provideCapturingFactoryInvocations = {
+            factory: function(name, getFn) {
+                var suffix = 'Filter';
 
-                return getRegisteredObjectDependencies($injector, animationInfo);
-            };
-        }
-
-        /**
-         * @param injector
-         * @param {{module: Object, providerName: string, providerMethod: string, declaration: *}} registeredObjectInfo
-         * @param {...string} toBeIgnoredDependencyServiceNames
-         * @returns {Object.<{instance: *, module: angular.Module}>}
-         */
-        function getRegisteredObjectDependencies(injector, registeredObjectInfo, toBeIgnoredDependencyServiceNames) {
-            var declaration = registeredObjectInfo.declaration;
-
-            var dependencyServiceNames = injector.annotate(declaration);
-            toBeIgnoredDependencyServiceNames = Array.prototype.slice.call(arguments, 2);
-
-            var result = {};
-            angular.forEach(dependencyServiceNames, function(dependencyServiceName) {
-                if (!toBeIgnoredDependencyServiceNames ||
-                        toBeIgnoredDependencyServiceNames.indexOf(dependencyServiceName) === -1) {
-                    var dependencyServiceInfo = {};
-                    dependencyServiceInfo.instance = injector.get(dependencyServiceName);
-                    dependencyServiceInfo.module = getServiceInfo(dependencyServiceName).module;
-
-                    result[dependencyServiceName] = dependencyServiceInfo;
+                var endsWithFilterSuffix = name.indexOf(suffix, name.length - suffix.length) !== -1;
+                if (!endsWithFilterSuffix) {
+                    throw 'Unexpected registered factory: ' + name;
                 }
-            });
 
-            return result;
-        }
+                var providerName = '$filterProvider';
+                var filterProviderRegistrationMethodName = registrationMethodPerProvider[providerName];
+                var nameWithoutSuffix = name.substring(0, name.length - suffix.length);
 
-        function $getDeclaration(providerName, providerDeclaration) {
-            if (angular.isObject(providerDeclaration) && !angular.isArray(providerDeclaration)) {
-                return providerDeclaration.$get;
-            } else {
-                var providerProbingModuleName =
-                    'generatedPoviderProbingModule#' + numberOfBuildProviderProbingModules;
-
-                var providerInstance = null;
-
-                angular.module(providerProbingModuleName, [module.name])
-                    .config([providerName + 'Provider', function(_providerInstance_) {
-                        providerInstance = _providerInstance_;
-                    }]);
-
-                angular.injector(['ng', providerProbingModuleName]);
-
-                return providerInstance.$get;
+                registerComponent(providerName, filterProviderRegistrationMethodName, nameWithoutSuffix, getFn,
+                    stripAnnotations(getFn), determineDependencies(getFn));
             }
-        }
+        };
 
-        /**
-         * @returns {({module: Object}|{module: Object, providerName: string, providerMethod: string, declaration: *})}
-         */
-        function getServiceInfo(serviceName) {
-            var result = moduleInvokeQueueItemInfoExtractor.findInvokeQueueItemInfo(
-                    module, '$provide', serviceRegistrationMethodNames, serviceName);
 
-            if (!result) {
-                var ngModuleInjector = /** @type {$injector} */ angular.injector(['ng']);
-
-                if (hasService(ngModuleInjector, serviceName)) {
-                   result = {module: angular.module('ng')};
-                }
-            } else {
-                result.providerName = '$provide';
-            }
-
-            if (!result) {
-                throw 'Could not find service with name: ' + serviceName;
-            }
-
-            return result;
-        }
-
-        /**
-         * @returns {({module: Object}|{module: Object, providerName: string, providerMethod: string, declaration: *})}
-         */
-        function getFilterInfo(filterName) {
-            var result = moduleInvokeQueueItemInfoExtractor.findInvokeQueueItemInfo(
-                    module, '$filterProvider', ['register'], filterName);
-
-            if (!result) {
-                var ngModuleInjector = /** @type {$injector} */ angular.injector(['ng']);
-
-                if (hasService(ngModuleInjector, filterName + 'Filter')) {
-                    result = {module: angular.module('ng')};
-                }
-            } else {
-                result.providerName = '$filterProvider';
-            }
-
-            if (!result) {
-                throw 'Could not find filter with name: ' + filterName;
-            }
-
-            return result;
-        }
-
-        /**
-         * @param {string} controllerName
-         * @returns {{module: Object, providerName: string, providerMethod: string, declaration: *}}
-         */
-        function getControllerInfo(controllerName) {
-            var result = moduleInvokeQueueItemInfoExtractor.findInvokeQueueItemInfo(
-                    module, '$controllerProvider', ['register'], controllerName);
-
-            if (!result) {
-                throw 'Could not find controller with name: ' + controllerName;
-            } else {
-                result.providerName = '$controllerProvider';
-            }
-
-            return result;
-        }
-
-        /**
-         * @param {string} directiveName
-         * @returns {{module: Object, providerName: string, providerMethod: string, declaration: *}}
-         */
-        function getDirectiveInfo(directiveName) {
-            var result = moduleInvokeQueueItemInfoExtractor.findInvokeQueueItemInfo(
-                    module, '$compileProvider', ['directive'], directiveName);
-
-            if (!result) {
-                throw 'Could not find directive with name: ' + directiveName;
-            } else {
-                result.providerName = '$compileProvider';
-            }
-
-            return result;
-        }
-
-        /**
-         * @param {string} animationName
-         * @returns {{module: Object, providerName: string, providerMethod: string, declaration: *}}
-         */
-        function getAnimationInfo(animationName) {
-            var result = moduleInvokeQueueItemInfoExtractor.findInvokeQueueItemInfo(
-                    module, '$animateProvider', ['register'], animationName);
-
-            if (!result) {
-                throw 'Could not find animation with name: ' + animationName;
-            } else {
-                result.providerName = '$animateProvider';
-            }
-
-            return result;
-        }
-
-        /**
-         * @param {$injector} injector
-         * @param {string} serviceName
-         * @returns {boolean}
-         */
-        function hasService(injector, serviceName) {
-            if (injector.has) {
-                return injector.has(serviceName);
-            } else {
-                try {
-                    injector.get(serviceName);
-
-                    return true;
-                } catch (e) {
-                    if (e instanceof Error && e.message.indexOf('Unknown provider: ') === 0) {
-                        return false;
-                    } else {
-                        throw e;
-                    }
-                }
-            }
-        }
-
+        emptyInjector.instantiate($FilterProvider, {$provide: $provideCapturingFactoryInvocations});
     }
 
 
     /**
-     * @ngdoc service
-     * @name moduleIntrospector
-     * @param {string} module
-     * @returns {ModuleIntrospector}
-     * @function
+     * @type {
+     *  Object.<
+     *      Object.<{
+     *          providerMethod: string,
+     *          componentName: string,
+     *          rawDeclaration: *,
+     *          strippedDeclaration: *,
+     *          injectedServices: string[]
+     *      }>
+     *  >}
      */
-    return function moduleIntrospector(module) {
-        return new ModuleIntrospector(module);
-    };
-
-}
-moduleIntrospectorServiceFactory.$inject = ["moduleInvokeQueueItemInfoExtractor"];
-
-
-angular.module('ngModuleIntrospector')
-    .factory('moduleIntrospector', moduleIntrospectorServiceFactory);
-
-}());
-
-;(function() {
-'use strict';
-
-/**
- * @ngdoc service
- * @name ModuleInvokeQueueItemInfoExtractor
- * @constructor
- */
-// @ngInject
-function ModuleInvokeQueueItemInfoExtractor() {
-
-    var that = this;
-
+    var registeredComponentsPerProviderName = {};
 
     /**
-     * @param {object} module an angular module
-     * @param {string} providerName
-     * @param {Array.<string>} providerMethods
-     * @param {string} itemName
-     * @returns {?{module: Object, providerMethod: string, declaration: *}}
-     */
-    this.findInvokeQueueItemInfo = function (module, providerName, providerMethods, itemName) {
+      * @type {Object.<{
+      *     rawDeclaration: RawProviderDeclaration,
+      *     strippedDeclaration: StrippedProviderDeclaration,
+      *     injectedProviders: string[]
+      *  }>}
+      */
+    var serviceProviderDeclarationPerProviderName = {};
 
-        var visitedModules = {};
-
-
-        /**
-         * @param {?{module: Object, providerMethod: string, declaration: *}} previousResult
-         * @param {object} currentModule
-         * @param {{providerName: string, providerMethods: Array.<string>, itemName: string}} searchParams
-         * @returns {?{module: Object, providerMethod: string, declaration: *}}
-         */
-        function findInvokeQueueItemInfoRecursive(previousResult, currentModule, searchParams) {
-
-            visitedModules[currentModule.name] = true;
-
-
-            var result = null;
-
-            angular.forEach(currentModule.requires, function(nameOfRequiredModule) {
-                if (!visitedModules[nameOfRequiredModule]) {
-                    var requiredModule = angular.module(nameOfRequiredModule);
-
-                    var resultFromRecursiveInvocation =
-                        findInvokeQueueItemInfoRecursive(previousResult, requiredModule, searchParams);
-
-                    if (providerName !== '$provide' || !previousResult || !resultFromRecursiveInvocation ||
-                        previousResult.providerMethod !== 'constant' ||
-                        resultFromRecursiveInvocation.providerMethod === 'constant') {
-                        result = resultFromRecursiveInvocation;
-                    }
-
-                    previousResult = result;
-                } else {
-                    result = previousResult;
-                }
-            });
-
-            var providerDeclarationOnInvokeQueue =
-                that.findProviderDeclarationOnInvokeQueue(previousResult, currentModule, searchParams);
-            if (providerDeclarationOnInvokeQueue) {
-                result = angular.extend(providerDeclarationOnInvokeQueue, {module: currentModule});
-
-                if (!result) {
-                    result = previousResult;
-                } else {
-                    previousResult = result;
-                }
-            }
-
-            return result;
-        }
-
-
-        return findInvokeQueueItemInfoRecursive(
-                null, module, {providerName: providerName, providerMethods: providerMethods, itemName: itemName});
+    var registrationMethodPerProvider = {
+        $filterProvider: 'register',
+        $controllerProvider: 'register',
+        $compileProvider: 'directive',
+        $animateProvider: 'register'
     };
 
+    var emptyInjector = angular.injector([]);
 
-    /**
-     * @param {?{module: Object, providerMethod: string, declaration: *}} previousResult
-     * @param {object} currentModule
-     * @param {{providerName: string, providerMethods: Array.<string>, itemName: string}} searchParams
-     * @returns {?{providerMethod: string, declaration: *}}
-     */
-    this.findProviderDeclarationOnInvokeQueue = function (previousResult, currentModule, searchParams) {
-        var result = null;
+    var providerInjector = null;
 
-        angular.forEach(currentModule._invokeQueue, function(item, index) {
-            var currentProviderName = item[0];
-            var currentProviderMethod = item[1];
 
-            if (currentProviderName === searchParams.providerName &&
-                    searchParams.providerMethods.indexOf(currentProviderMethod) !== -1) {
-                var invokeLaterArgs = item[2];
+    /** @ngInject */
+    var providerInjectorCapturingConfigFn = function ($injector) {
+        providerInjector = $injector;
+    };
+    providerInjectorCapturingConfigFn.$inject = ["$injector"];
 
-                if (invokeLaterArgs.length === 2) {
-                    if (invokeLaterArgs[0] === searchParams.itemName) {
-                        if (isNotConstantServiceOrTryingToOverrideOne(
-                                previousResult, searchParams, currentProviderMethod)) {
-                            result = {providerMethod: currentProviderMethod, declaration: invokeLaterArgs[1]};
+    /** @ngInject */
+    var $provideMethodsHookConfigFn = function($provide) {
 
-                            previousResult = result;
-                        }
-                    }
-                } else if (invokeLaterArgs.length === 1) {
-                    if (invokeLaterArgs[0].hasOwnProperty(searchParams.itemName)) {
-                        if (isNotConstantServiceOrTryingToOverrideOne(
-                                previousResult, searchParams, currentProviderMethod)) {
-                            result = {
-                                providerMethod: currentProviderMethod,
-                                declaration: invokeLaterArgs[0][searchParams.itemName]
-                            };
+        var registerService = angular.bind(undefined, registerComponent, '$provide');
 
-                            previousResult = result;
-                        }
-                    }
-                } else {
-                    throw 'Unexpected length of invokeQueue[' + index + '][2] (the "invokeLater" arguments): ' +
-                        invokeLaterArgs.length;
-                }
+
+        afterProviderMethodExecution($provide, 'constant', function(/** string */ name, value) {
+            registerService('constant', name, value, value, []);
+        });
+
+        afterProviderMethodExecution($provide, 'value', function(/** string */ name, value) {
+            if (!existingConstantService(name)) {
+                registerService('value', name, value, value, []);
             }
         });
 
-        return result;
+        afterProviderMethodExecution($provide, 'service', function(/** string */ name, /** PossiblyAnnotatedFn */ service) {
+            if (!existingConstantService(name)) {
+                registerService('service', name,
+                    service, stripAnnotations(service), determineDependencies(service));
+            }
+        });
+
+        afterProviderMethodExecution($provide, 'factory', function(/** string */ name, /** PossiblyAnnotatedFn */ getFn) {
+            if (!existingConstantService(name)) {
+                registerService('factory', name,
+                    getFn, stripAnnotations(getFn), determineDependencies(getFn));
+            }
+        });
+
+        afterProviderMethodExecution($provide, 'provider', function(/** string */ name, /** RawProviderDeclaration */ provider) {
+            if (existingConstantService(name)) {
+                return;
+            }
+
+            var providerName = name + 'Provider';
+
+            var isProviderObject = angular.isObject(provider) && !angular.isArray(provider);
+            var strippedProviderDeclaration = !isProviderObject ? stripAnnotations(provider) : provider;
+            var injectedProviders = !isProviderObject ? determineDependencies(provider) : [];
+            registerServiceProviderDeclaration(providerName, provider, strippedProviderDeclaration, injectedProviders);
+
+            var providerInstance = providerInjector.get(providerName);
+
+            registerService('provider', name, providerInstance.$get,
+                    stripAnnotations(providerInstance.$get), determineDependencies(providerInstance.$get));
+
+            if (name === '$filter') {
+                registerBuiltInFilters(provider);
+            }
+
+
+            var registrationMethodOfProvider = registrationMethodPerProvider[providerName];
+            if (registrationMethodOfProvider) {
+                afterProviderMethodExecution(providerInstance, registrationMethodOfProvider, function(
+                        /** string */ name, /** PossiblyAnnotatedFn */ rawDeclaration) {
+                    registerComponent(providerName, registrationMethodOfProvider, name, rawDeclaration,
+                            stripAnnotations(rawDeclaration), determineDependencies(rawDeclaration));
+                });
+            }
+        });
+    };
+    $provideMethodsHookConfigFn.$inject = ["$provide"];
+
+
+    // create an injector that first captures the "providerInjector", then hooks the $provide methods,
+    // after that loads the ng module and finally loads the modules of moduleNames.
+    angular.injector([providerInjectorCapturingConfigFn, $provideMethodsHookConfigFn, 'ng'].concat(moduleNames));
+
+
+    /**
+     * @param {string} providerName
+     * @param {string} componentName
+     * @returns {{
+     *      providerMethod: string,
+     *      componentName: string,
+     *      rawDeclaration: *,
+     *      strippedDeclaration: *,
+     *      injectedServices: string[]
+     *  }}
+     */
+    this.getProviderComponentDeclaration = function(providerName, componentName) {
+        var registeredComponents = registeredComponentsPerProviderName[providerName];
+
+        var registeredComponent = registeredComponents && registeredComponents[componentName];
+        if (!registeredComponent) {
+            throw 'Could not find registered component "' + componentName + '" for provider: ' + providerName;
+        }
+
+        return registeredComponent;
     };
 
 
-    function isNotConstantServiceOrTryingToOverrideOne(previousResult, searchParams, currentProviderMethod) {
-        return searchParams.providerName !== '$provide' || !previousResult ||
-                previousResult.providerMethod !== 'constant' || currentProviderMethod === 'constant';
-    }
+    /**
+     * @param {string} providerName
+     * @returns {{rawDeclaration: RawProviderDeclaration, strippedDeclaration: StrippedProviderDeclaration, injectedProviders: string[]}}
+     */
+    this.getProviderDeclaration = function(providerName) {
+        var result = serviceProviderDeclarationPerProviderName[providerName];
+        if (!result) {
+            throw 'Could not find provider: ' + providerName;
+        }
+
+        //noinspection JSValidateTypes
+        return result; //TODO: investigate with WebStorm complains about incompatible types
+    };
+
 }
 
 
 angular.module('ngModuleIntrospector')
-    .service('moduleInvokeQueueItemInfoExtractor', ModuleInvokeQueueItemInfoExtractor);
+    .factory('moduleIntrospector', function() {
+
+        /**
+         * @ngdoc service
+         * @name moduleIntrospector
+         * @param {...string} modules
+         * @returns {ModuleIntrospector}
+         * @function
+         */
+        return function moduleIntrospector(modules) {
+            return new ModuleIntrospector(modules);
+        };
+    });
 
 }());
