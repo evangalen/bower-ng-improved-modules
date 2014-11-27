@@ -1,6 +1,6 @@
 /**
  * @license ngModuleIntrospector
- * (c) 2014 Emil van Galen. https://github.com/evangalen/ng-improved-modules
+ * (c) 2014 Emil van Galen. https://github.com/evangalen/ng-module-introspector
  * License: MIT
  */
 (function() { 'use strict';
