@@ -18,13 +18,20 @@ angular.module('ngModuleIntrospector', []);
  */
 
 
+function assertTruthy(value, message) {
+    if (!value) {
+        throw new Error(message);
+    }
+}
+
+
 /**
  * @ngdoc type
- * @param {string} moduleName
+ * @param {Array.<(string|Function|Object)>} modules
  * @param {boolean} [includeNgMock = false]
  * @constructor
  */
-function ModuleIntrospector(moduleName, includeNgMock) {
+function ModuleIntrospector(modules, includeNgMock) {
     includeNgMock = includeNgMock || false;
 
     /**
@@ -143,9 +150,8 @@ function ModuleIntrospector(moduleName, includeNgMock) {
         }
 
         var serviceDeclarations = serviceDeclarationsPerServiceName[serviceName];
-        if (serviceDeclarations && serviceDeclarations.length > 1) {
-            throw new Error('Only one service declaration should exist for a service name: ' + serviceName);
-        }
+        assertTruthy(!serviceDeclarations || serviceDeclarations.length <= 1,
+                'Only one service declaration should exist for a service name: ' + serviceName);
 
         return !!serviceDeclarations && serviceDeclarations.length === 1 &&
                 serviceDeclarations[0].providerMethod === 'constant';
@@ -176,9 +182,7 @@ function ModuleIntrospector(moduleName, includeNgMock) {
                 var suffix = 'Filter';
 
                 var endsWithFilterSuffix = name.indexOf(suffix, name.length - suffix.length) !== -1;
-                if (!endsWithFilterSuffix) {
-                    throw 'Unexpected registered factory: ' + name;
-                }
+                assertTruthy(endsWithFilterSuffix, 'Unexpected registered factory: ' + name);
 
                 var filterProviderRegistrationMethodName = metadataPerProvider.$filterProvider.providerMethods[0];
                 var nameWithoutSuffix = name.substring(0, name.length - suffix.length);
@@ -343,12 +347,26 @@ function ModuleIntrospector(moduleName, includeNgMock) {
         };
     };
 
+    var injectorModules = [];
+
+    angular.forEach(modules, function(currentModule) {
+        if (angular.isObject(currentModule) && !angular.isArray(currentModule)) {
+            injectorModules.push(function($provide) {
+                angular.forEach(currentModule, function(value, key) {
+                    $provide.value(key, value);
+                });
+            });
+        } else {
+            injectorModules.push(currentModule);
+        }
+    });
+
     // create an injector that first captures the "providerInjector", then hooks the $provide methods,
     // after that loads the ng module and finally loads the modules of moduleNames.
     angular.injector([providerInjectorCapturingConfigFn, $provideMethodsHookConfigFn,
             setProcessingBuiltInComponentsTo(true), 'ng',
             setForgetFutureRegisteredComponents(!includeNgMock), 'ngMock', setForgetFutureRegisteredComponents(false),
-            setProcessingBuiltInComponentsTo(false), moduleName]);
+            setProcessingBuiltInComponentsTo(false)].concat(injectorModules));
 
 
     /**
@@ -426,13 +444,13 @@ angular.module('ngModuleIntrospector')
         /**
          * @ngdoc service
          * @name moduleIntrospector
-         * @param {string} module
+         * @param {Array.<(string|Function|Object)>} modules
          * @params {boolean} includeNgMock
          * @returns {ModuleIntrospector}
          * @function
          */
-        return function moduleIntrospector(module, includeNgMock) {
-            return new ModuleIntrospector(module, includeNgMock);
+        return function moduleIntrospector(modules, includeNgMock) {
+            return new ModuleIntrospector(modules, includeNgMock);
         };
     });
 
